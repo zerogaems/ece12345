@@ -14,7 +14,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-  return 'Bot is running smoothly with Dual Links on Render!'
+  return 'Bot is running smoothly with Admin Panel on Render!'
 
 
 def run_flask():
@@ -26,12 +26,14 @@ def run_flask():
 BOT_TOKEN = os.environ.get(
     'BOT_TOKEN', 'ضع_التوكن_هنا_إن_لم_تستخدم_متغيرات_البيئة'
 )
-ADMIN_ID = int(os.environ.get('ADMIN_ID', '7547218555'))
+ADMIN_ID = int(os.environ.get('ADMIN_ID', '123456789'))
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# قاموس حفظ حالات الإدخال المؤقتة للأدمن
+user_states = {}
+
 # معرفات القنوات والمجموعات لكل سنة دراسية (Chat IDs)
-# ملاحظة: أضف البوت كمشرف (Admin) في جميع القنوات والمجموعات مع إعطائه صلاحية "Invite via Link"
 YEAR_CHATS = {
     'السنة الأولى': {
         'lectures': -1004413316628,  # ID قناة المحاضرات
@@ -55,7 +57,6 @@ YEAR_CHATS = {
     },
 }
 
-
 # ==================== تهيئة قاعدة البيانات ====================
 def init_db():
   conn = sqlite3.connect('telecom_students.db')
@@ -78,7 +79,7 @@ def init_db():
 init_db()
 
 
-# ==================== تنظيف وتوحيد أرقام الهواتف ====================
+# ==================== تنظيف وتوحيد أرقام الهواتف والسنوات ====================
 def clean_phone(phone_str):
   if not phone_str:
     return ''
@@ -92,17 +93,59 @@ def clean_phone(phone_str):
   return digits
 
 
+def normalize_year(year_str):
+  y = str(year_str).strip()
+  if 'أول' in y or 'اول' in y or '1' in y:
+    return 'السنة الأولى'
+  if 'ثان' in y or '2' in y:
+    return 'السنة الثانية'
+  if 'ثالث' in y or '3' in y:
+    return 'السنة الثالثة'
+  if 'رابع' in y or '4' in y:
+    return 'السنة الرابعة'
+  if 'خامس' in y or '5' in y:
+    return 'السنة الخامسة'
+  return y
+
+
 # ==================== معالجة واستيراد ملف Excel ====================
 def process_excel_file(file_path):
   df = pd.read_excel(file_path)
-  df = df.iloc[:, [1, 2, 3, 4]]
-  df.columns = ['Name', 'Student_ID', 'Year', 'Phone']
+  df.columns = [str(c).strip() for c in df.columns]
 
-  df['Student_ID'] = df['Student_ID'].astype(str).str.strip()
-  df['Phone'] = df['Phone'].apply(clean_phone)
-  df['Year'] = df['Year'].astype(str).str.strip()
+  name_col = next(
+      (c for c in df.columns if 'اسم' in c or 'الاسم' in c or 'Name' in c),
+      df.columns[1] if len(df.columns) > 1 else df.columns[0],
+  )
+  id_col = next(
+      (
+          c
+          for c in df.columns
+          if 'جامعي' in c or 'رقم' in c or 'ID' in c or 'Student' in c
+      ),
+      df.columns[2] if len(df.columns) > 2 else df.columns[0],
+  )
+  year_col = next(
+      (c for c in df.columns if 'سنة' in c or 'السنة' in c or 'Year' in c),
+      df.columns[3] if len(df.columns) > 3 else df.columns[0],
+  )
+  phone_col = next(
+      (
+          c
+          for c in df.columns
+          if 'هاتف' in c or 'موبايل' in c or 'واتس' in c or 'Phone' in c
+      ),
+      df.columns[4] if len(df.columns) > 4 else df.columns[0],
+  )
 
-  df_clean = df.drop_duplicates(subset=['Student_ID'], keep='last')
+  df_students = pd.DataFrame({
+      'Name': df[name_col].astype(str).str.strip(),
+      'Student_ID': df[id_col].astype(str).str.strip(),
+      'Year': df[year_col].apply(normalize_year),
+      'Phone': df[phone_col].apply(clean_phone),
+  })
+
+  df_clean = df_students.drop_duplicates(subset=['Student_ID'], keep='last')
 
   conn = sqlite3.connect('telecom_students.db')
   cursor = conn.cursor()
@@ -135,6 +178,264 @@ if os.path.exists('uploaded_responses.xlsx'):
     process_excel_file('uploaded_responses.xlsx')
   except Exception:
     pass
+
+
+# ==================== لوحة التحكم للأدمن (Admin Panel) ====================
+def get_admin_keyboard():
+  markup = types.InlineKeyboardMarkup(row_width=2)
+  btn_stats = types.InlineKeyboardButton(
+      text='📊 الإحصائيات العامة', callback_data='admin_stats'
+  )
+  btn_export = types.InlineKeyboardButton(
+      text='📥 تنزيل تقرير Excel', callback_data='admin_export'
+  )
+  btn_search = types.InlineKeyboardButton(
+      text='🔍 البحث عن طالب', callback_data='admin_search'
+  )
+  btn_reset = types.InlineKeyboardButton(
+      text='🔓 فك قفل طالب', callback_data='admin_reset'
+  )
+  btn_broadcast = types.InlineKeyboardButton(
+      text='📢 إرسال إعلان للجميع', callback_data='admin_broadcast'
+  )
+  btn_update_phone = types.InlineKeyboardButton(
+      text='📱 تعديل رقم طالب', callback_data='admin_update_phone'
+  )
+
+  markup.add(btn_stats, btn_export)
+  markup.add(btn_search, btn_reset)
+  markup.add(btn_update_phone, btn_broadcast)
+  return markup
+
+
+@bot.message_handler(commands=['admin'])
+def admin_command(message):
+  if message.from_user.id != ADMIN_ID:
+    bot.reply_to(message, '⚠️ عذراً، هذه اللوحة مخصصة لرئيس الهيئة/الأدمن فقط.')
+    return
+
+  text = (
+      '🛠️ **لوحة تحكم رئيس الهيئة (Admin Panel)**\n\n'
+      'مرحباً بك! اختر الخدمة التي تريد تنفيذها من الأزرار أدناه، أو أرسل ملف'
+      ' الـ Excel لتحديث البيانات فوراً.'
+  )
+  bot.send_message(
+      message.chat.id,
+      text,
+      reply_markup=get_admin_keyboard(),
+      parse_mode='Markdown',
+  )
+
+
+# ==================== التفاعل مع أزرار لوحة الأدمن (Callback Query) ====================
+@bot.callback_query_handler(func=lambda call: call.data.startswith('admin_'))
+def handle_admin_callbacks(call):
+  if call.from_user.id != ADMIN_ID:
+    bot.answer_callback_query(call.id, '⚠️ غير مصرح لك.', show_alert=True)
+    return
+
+  action = call.data
+
+  if action == 'admin_stats':
+    conn = sqlite3.connect('telecom_students.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM students')
+    total = cursor.fetchone()[0]
+    cursor.execute('SELECT COUNT(*) FROM students WHERE joined = 1')
+    joined = cursor.fetchone()[0]
+    cursor.execute(
+        'SELECT year, COUNT(*), SUM(joined) FROM students GROUP BY year'
+    )
+    year_stats = cursor.fetchall()
+    conn.close()
+
+    text = '📊 **إحصائيات الانتقال للتلغرام:**\n\n'
+    text += f'👥 إجمالي المسجلين بالاستبيان: **{total}**\n'
+    text += f'✅ إجمالي المنضمين فعلياً: **{joined}**\n\n'
+    text += '📌 **التفاصيل حسب السنة:**\n'
+
+    for y_name, count, joined_count in year_stats:
+      jc = joined_count if joined_count else 0
+      text += f'• {y_name}: **{jc} / {count}** انضموا\n'
+
+    bot.send_message(
+        call.message.chat.id,
+        text,
+        reply_markup=get_admin_keyboard(),
+        parse_mode='Markdown',
+    )
+    bot.answer_callback_query(call.id)
+
+  elif action == 'admin_export':
+    bot.answer_callback_query(call.id, '⏳ جاري جلب ملف البيانات...')
+    conn = sqlite3.connect('telecom_students.db')
+    df = pd.read_sql_query('SELECT * FROM students', conn)
+    conn.close()
+
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+      df.to_excel(writer, index=False, sheet_name='Students_Status')
+    output.seek(0)
+
+    bot.send_document(
+        call.message.chat.id,
+        document=types.InputFile(
+            output, filename='Telecom_Students_Report.xlsx'
+        ),
+        caption='📊 **تقرير الطلاب الكامل وحالات الانضمام**',
+        parse_mode='Markdown',
+    )
+
+  elif action == 'admin_search':
+    user_states[call.from_user.id] = 'awaiting_search_id'
+    bot.send_message(
+        call.message.chat.id,
+        '🔍 **يرجى إرسال الرقم الجامعي للطالب المراد البحث عنه:**',
+    )
+    bot.answer_callback_query(call.id)
+
+  elif action == 'admin_reset':
+    user_states[call.from_user.id] = 'awaiting_reset_id'
+    bot.send_message(
+        call.message.chat.id,
+        '🔓 **يرجى إرسال الرقم الجامعي للطالب المراد فك قفله:**',
+    )
+    bot.answer_callback_query(call.id)
+
+  elif action == 'admin_broadcast':
+    user_states[call.from_user.id] = 'awaiting_broadcast_msg'
+    bot.send_message(
+        call.message.chat.id,
+        '📢 **اكتب الرسالة التي تريد بثها لجميع الطلاب المنضمين:**',
+    )
+    bot.answer_callback_query(call.id)
+
+  elif action == 'admin_update_phone':
+    user_states[call.from_user.id] = 'awaiting_update_phone'
+    bot.send_message(
+        call.message.chat.id,
+        '📱 **أرسل الرقم الجامعي والرقم الجديد مفصولين بمسافة**\nمثال:'
+        ' `123456 0912345678`:',
+        parse_mode='Markdown',
+    )
+    bot.answer_callback_query(call.id)
+
+
+# ==================== استقبال إدخالات الأدمن التفاعلية ====================
+@bot.message_handler(
+    func=lambda msg: msg.from_user.id == ADMIN_ID
+    and msg.from_user.id in user_states
+)
+def handle_admin_inputs(message):
+  state = user_states.get(message.from_user.id)
+
+  if state == 'awaiting_search_id':
+    sid = message.text.strip()
+    conn = sqlite3.connect('telecom_students.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT name, year, phone, joined, telegram_user_id, joined_at FROM'
+        ' students WHERE student_id = ?',
+        (sid,),
+    )
+    st = cursor.fetchone()
+    conn.close()
+
+    if not st:
+      bot.reply_to(message, '❌ لم يتم العثور على هذا الرقم الجامعي.')
+    else:
+      name, year, phone, joined, tg_id, joined_at = st
+      status = '✅ انضم بالفعل' if joined == 1 else '❌ لم ينضم بعد'
+      res = (
+          f'🔍 **بيانات الطالب:**\n\n'
+          f'👤 **الاسم:** {name}\n'
+          f'🆔 **الرقم الجامعي:** {sid}\n'
+          f'📚 **السنة:** {year}\n'
+          f'📱 **الرقم:** `{phone}`\n'
+          f'📌 **الحالة:** {status}\n'
+          f'🆔 **Telegram ID:** `{tg_id if tg_id else "غير مسجل"}`\n'
+          f'🕒 **تاريخ الانضمام:** {joined_at}'
+      )
+      bot.reply_to(message, res, parse_mode='Markdown')
+
+    del user_states[message.from_user.id]
+
+  elif state == 'awaiting_reset_id':
+    sid = message.text.strip()
+    conn = sqlite3.connect('telecom_students.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'UPDATE students SET telegram_user_id = NULL, joined = 0 WHERE'
+        ' student_id = ?',
+        (sid,),
+    )
+
+    if cursor.rowcount > 0:
+      conn.commit()
+      bot.reply_to(message, f'✅ تم فك القفل عن الرقم الجامعي ({sid}).')
+    else:
+      bot.reply_to(message, '❌ الرقم الجامعي غير موجود.')
+    conn.close()
+    del user_states[message.from_user.id]
+
+  elif state == 'awaiting_broadcast_msg':
+    msg_text = message.text.strip()
+    conn = sqlite3.connect('telecom_students.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        'SELECT telegram_user_id FROM students WHERE joined = 1 AND'
+        ' telegram_user_id IS NOT NULL'
+    )
+    users = cursor.fetchall()
+    conn.close()
+
+    success = 0
+    for u in users:
+      try:
+        bot.send_message(
+            u[0],
+            f'📢 **إعلان من هيئة الاتصالات:**\n\n{msg_text}',
+            parse_mode='Markdown',
+        )
+        success += 1
+      except Exception:
+        continue
+
+    bot.reply_to(
+        message,
+        f'✅ تم إرسال الإعلان بنجاح إلى **{success}** طالب.',
+        parse_mode='Markdown',
+    )
+    del user_states[message.from_user.id]
+
+  elif state == 'awaiting_update_phone':
+    args = message.text.split()
+    if len(args) < 2:
+      bot.reply_to(
+          message,
+          '⚠️ صيغة غير صحيحة. أرسل الرقم الجامعي ثم الهاتف المحدث مع مسافة'
+          ' بينهما.',
+      )
+    else:
+      sid = args[0].strip()
+      new_phone = clean_phone(args[1].strip())
+      conn = sqlite3.connect('telecom_students.db')
+      cursor = conn.cursor()
+      cursor.execute(
+          'UPDATE students SET phone = ? WHERE student_id = ?', (new_phone, sid)
+      )
+
+      if cursor.rowcount > 0:
+        conn.commit()
+        bot.reply_to(
+            message,
+            f'✅ تم تحديث رقم الطالب ({sid}) إلى `{new_phone}` بنجاح.',
+            parse_mode='Markdown',
+        )
+      else:
+        bot.reply_to(message, '❌ الرقم الجامعي غير موجود.')
+      conn.close()
+    del user_states[message.from_user.id]
 
 
 # ==================== رفع واستيراد Excel (للأدمن) ====================
@@ -181,183 +482,15 @@ def handle_excel_upload(message):
     )
 
 
-# ==================== الأوامر الإدارية للأدمن ====================
-
-
-@bot.message_handler(commands=['search'])
-def search_student(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-  args = message.text.split()
-  if len(args) < 2:
-    bot.reply_to(
-        message,
-        '⚠️ يرجى إدخال الرقم الجامعي:\n`/search 123456`',
-        parse_mode='Markdown',
-    )
-    return
-
-  sid = args[1].strip()
-  conn = sqlite3.connect('telecom_students.db')
-  cursor = conn.cursor()
-  cursor.execute(
-      'SELECT name, year, phone, joined, telegram_user_id, joined_at FROM'
-      ' students WHERE student_id = ?',
-      (sid,),
-  )
-  st = cursor.fetchone()
-  conn.close()
-
-  if not st:
-    bot.reply_to(message, '❌ لم يتم العثور على هذا الرقم الجامعي.')
-    return
-
-  name, year, phone, joined, tg_id, joined_at = st
-  status = '✅ انضم بالفعل' if joined == 1 else '❌ لم ينضم بعد'
-
-  res = (
-      f'🔍 **بيانات الطالب:**\n\n'
-      f'👤 **الاسم:** {name}\n'
-      f'🆔 **الرقم الجامعي:** {sid}\n'
-      f'📚 **السنة:** {year}\n'
-      f'📱 **الرقم:** `{phone}`\n'
-      f'📌 **الحالة:** {status}\n'
-      f'🆔 **Telegram ID:** `{tg_id if tg_id else "غير مسجل"}`\n'
-      f'🕒 **تاريخ الانضمام:** {joined_at}'
-  )
-  bot.reply_to(message, res, parse_mode='Markdown')
-
-
-@bot.message_handler(commands=['update_phone'])
-def update_phone_cmd(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-  args = message.text.split()
-  if len(args) < 3:
-    bot.reply_to(
-        message,
-        '⚠️ الاستخدام الصحيح:\n`/update_phone الرقم_الجامعي الرقم_الجديد`',
-        parse_mode='Markdown',
-    )
-    return
-
-  sid = args[1].strip()
-  new_phone = clean_phone(args[2].strip())
-
-  conn = sqlite3.connect('telecom_students.db')
-  cursor = conn.cursor()
-  cursor.execute(
-      'UPDATE students SET phone = ? WHERE student_id = ?', (new_phone, sid)
-  )
-
-  if cursor.rowcount > 0:
-    conn.commit()
-    bot.reply_to(
-        message,
-        f'✅ تم تحديث رقم الطالب ({sid}) إلى `{new_phone}` بنجاح.',
-        parse_mode='Markdown',
-    )
-  else:
-    bot.reply_to(message, '❌ لم يتم العثور على هذا الرقم الجامعي.')
-  conn.close()
-
-
-@bot.message_handler(commands=['export'])
-def export_data(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-  bot.reply_to(message, '⏳ جاري استخراج ملف البيانات الكامل...')
-
-  conn = sqlite3.connect('telecom_students.db')
-  df = pd.read_sql_query('SELECT * FROM students', conn)
-  conn.close()
-
-  output = io.BytesIO()
-  with pd.ExcelWriter(output, engine='openpyxl') as writer:
-    df.to_excel(writer, index=False, sheet_name='Students_Status')
-  output.seek(0)
-
-  bot.send_document(
-      message.chat.id,
-      document=types.InputFile(output, filename='Telecom_Students_Report.xlsx'),
-      caption='📊 **تقرير الطلاب الكامل وحالات الانضمام**',
-      parse_mode='Markdown',
-  )
-
-
-@bot.message_handler(commands=['broadcast'])
-def broadcast_msg(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-  msg_text = message.text.replace('/broadcast', '').strip()
-  if not msg_text:
-    bot.reply_to(
-        message,
-        '⚠️ اكتب الرسالة بعد الأمر. مثال:\n`/broadcast السلام عليكم`',
-        parse_mode='Markdown',
-    )
-    return
-
-  conn = sqlite3.connect('telecom_students.db')
-  cursor = conn.cursor()
-  cursor.execute(
-      'SELECT telegram_user_id FROM students WHERE joined = 1 AND'
-      ' telegram_user_id IS NOT NULL'
-  )
-  users = cursor.fetchall()
-  conn.close()
-
-  success = 0
-  for u in users:
-    try:
-      bot.send_message(
-          u[0], f'📢 **إعلان من هيئة الاتصالات:**\n\n{msg_text}', parse_mode='Markdown'
-      )
-      success += 1
-    except Exception:
-      continue
-
-  bot.reply_to(
-      message,
-      f'✅ تم إرسال الإعلان بنجاح إلى **{success}** طالب مسجل.',
-      parse_mode='Markdown',
-  )
-
-
-@bot.message_handler(commands=['reset'])
-def reset_student(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-  args = message.text.split()
-  if len(args) < 2:
-    bot.reply_to(
-        message,
-        '⚠️ اكتب الرقم الجامعي:\n`/reset 123456`',
-        parse_mode='Markdown',
-    )
-    return
-
-  sid = args[1].strip()
-  conn = sqlite3.connect('telecom_students.db')
-  cursor = conn.cursor()
-  cursor.execute(
-      'UPDATE students SET telegram_user_id = NULL, joined = 0 WHERE'
-      ' student_id = ?',
-      (sid,),
-  )
-
-  if cursor.rowcount > 0:
-    conn.commit()
-    bot.reply_to(message, f'✅ تم فك القفل عن الرقم الجامعي ({sid}).')
-  else:
-    bot.reply_to(message, '❌ الرقم الجامعي غير موجود.')
-  conn.close()
-
-
 # ==================== تفاعل الطلاب (/start) ====================
 @bot.message_handler(commands=['start'])
 def start_command(message):
   user_id = message.from_user.id
+
+  # إذا كان المستخدم هو الأدمن، تعرض له اللوحة مباشرة
+  if user_id == ADMIN_ID:
+    admin_command(message)
+    return
 
   conn = sqlite3.connect('telecom_students.db')
   cursor = conn.cursor()
@@ -371,7 +504,7 @@ def start_command(message):
     bot.send_message(
         message.chat.id,
         f'🚫 **عذراً يا {existing_user_by_id[0]}!**\n\n'
-        f'لقد حصلت على روابط الانضمام لسنتك الدراسية (**{existing_user_by_id[1]}**) سابقاً.\n'
+        f'لقدحصلت على روابط الانضمام لسنتك الدراسية (**{existing_user_by_id[1]}**) سابقاً.\n'
         f'⚠️ **النظام يمنع الحصول على روابط أخرى.**',
         parse_mode='Markdown',
     )
@@ -466,21 +599,18 @@ def handle_contact(message):
     return
 
   try:
-    # 1. إنشاء رابط دعوة شخصي لقناة المحاضرات (استخدام واحد)
     lectures_link = bot.create_chat_invite_link(
         chat_id=year_data['lectures'],
         member_limit=1,
         expire_date=int(message.date) + 600,
     ).invite_link
 
-    # 2. إنشاء رابط دعوة شخصي لمجموعة المناقشة (استخدام واحد)
     discussion_link = bot.create_chat_invite_link(
         chat_id=year_data['discussion'],
         member_limit=1,
         expire_date=int(message.date) + 600,
     ).invite_link
 
-    # قفل الحساب وتحديث الحالة كـ joined = 1
     cursor.execute(
         """
             UPDATE students 
@@ -491,7 +621,6 @@ def handle_contact(message):
     )
     conn.commit()
 
-    # أزرار انضمام مباشرة تحت الرسالة
     markup = types.InlineKeyboardMarkup(row_width=1)
     btn1 = types.InlineKeyboardButton(
         text='📚 الانضمام لقناة المحاضرات', url=lectures_link
@@ -523,39 +652,6 @@ def handle_contact(message):
     )
 
   conn.close()
-
-
-# ==================== الإحصائيات (/stats) ====================
-@bot.message_handler(commands=['stats'])
-def admin_stats(message):
-  if message.from_user.id != ADMIN_ID:
-    return
-
-  conn = sqlite3.connect('telecom_students.db')
-  cursor = conn.cursor()
-
-  cursor.execute('SELECT COUNT(*) FROM students')
-  total_students = cursor.fetchone()[0]
-
-  cursor.execute('SELECT COUNT(*) FROM students WHERE joined = 1')
-  joined_students = cursor.fetchone()[0]
-
-  cursor.execute(
-      'SELECT year, COUNT(*), SUM(joined) FROM students GROUP BY year'
-  )
-  year_stats = cursor.fetchall()
-  conn.close()
-
-  text = '📊 **إحصائيات الانتقال للتلغرام:**\n\n'
-  text += f'👥 إجمالي الطلاب المسجلين: **{total_students}**\n'
-  text += f'✅ إجمالي المنضمين فعلياً: **{joined_students}**\n\n'
-  text += '📌 **التفاصيل حسب السنة:**\n'
-
-  for y_name, count, joined_count in year_stats:
-    joined_c = joined_count if joined_count else 0
-    text += f'• {y_name}: **{joined_c} / {count}** انضموا\n'
-
-  bot.send_message(message.chat.id, text, parse_mode='Markdown')
 
 
 # ==================== التشغيل ====================
