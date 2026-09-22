@@ -1,12 +1,20 @@
 import io
+import logging
 import os
 import re
-import sqlite3
+import time
 from threading import Thread
 from flask import Flask
+import libsql
 import pandas as pd
 import telebot
 from telebot import types
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+)
+logger = logging.getLogger('telecom_bot')
 
 # ==================== خادم Flask لإرضاء Render و UptimeRobot ====================
 app = Flask('')
@@ -23,12 +31,36 @@ def run_flask():
 
 
 # ==================== الإعدادات الأساسية ====================
-BOT_TOKEN = os.environ.get(
-    'BOT_TOKEN', 'ضع_التوكن_هنا_إن_لم_تستخدم_متغيرات_البيئة'
-)
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+if not BOT_TOKEN:
+  raise RuntimeError('يجب ضبط متغير البيئة BOT_TOKEN قبل تشغيل البوت.')
+
 ADMIN_ID = int(os.environ.get('ADMIN_ID', '123456789'))
 
+# معرف الأدمن/ممثل الهيئة على تيليجرام (بدون @) - يظهر للطلاب عند الحاجة للتواصل
+ADMIN_USERNAME = 'Youssef_Sabra'
+
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# ==================== الاتصال بقاعدة بيانات Turso (بدل ملف SQLite محلي) ====================
+# بدل ما نخزن الملف محلياً (بينمسح مع كل إعادة تشغيل على Render)، نتصل بقاعدة
+# بيانات Turso السحابية الدائمة. لازم تضبط هدين المتغيرين على Render:
+# TURSO_DATABASE_URL و TURSO_AUTH_TOKEN
+TURSO_URL = os.environ.get('TURSO_DATABASE_URL')
+TURSO_AUTH_TOKEN = os.environ.get('TURSO_AUTH_TOKEN')
+
+if not TURSO_URL or not TURSO_AUTH_TOKEN:
+  raise RuntimeError(
+      'يجب ضبط TURSO_DATABASE_URL و TURSO_AUTH_TOKEN كمتغيرات بيئة قبل'
+      ' التشغيل.'
+  )
+
+
+def get_connection():
+  """يفتح اتصال جديد بقاعدة بيانات Turso. الواجهة نفس sqlite3 تقريباً
+  (cursor / execute / commit / close) لذلك باقي الكود ما احتاج تعديل كبير."""
+  return libsql.connect(database=TURSO_URL, auth_token=TURSO_AUTH_TOKEN)
+
 
 # قاموس حفظ حالات الإدخال المؤقتة للأدمن
 user_states = {}
@@ -57,9 +89,10 @@ YEAR_CHATS = {
     },
 }
 
+
 # ==================== تهيئة قاعدة البيانات ====================
 def init_db():
-  conn = sqlite3.connect('telecom_students.db')
+  conn = get_connection()
   cursor = conn.cursor()
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS students (
@@ -109,33 +142,26 @@ def normalize_year(year_str):
 
 
 # ==================== معالجة واستيراد ملف Excel ====================
+def find_column(df, keywords, label):
+  col = next((c for c in df.columns if any(k in c for k in keywords)), None)
+  if col is None:
+    raise ValueError(f'لم يتم العثور على عمود "{label}" في ملف الإكسل.')
+  return col
+
+
 def process_excel_file(file_path):
   df = pd.read_excel(file_path)
   df.columns = [str(c).strip() for c in df.columns]
 
-  name_col = next(
-      (c for c in df.columns if 'اسم' in c or 'الاسم' in c or 'Name' in c),
-      df.columns[1] if len(df.columns) > 1 else df.columns[0],
+  # بحث صارم بالاسم عن كل عمود مطلوب - إذا لم يوجد نرفض الاستيراد
+  # بدل الرجوع لعمود عشوائي بالموضع (كان يسبب استيراد بيانات خاطئة بصمت)
+  name_col = find_column(df, ['اسم', 'الاسم', 'Name'], 'الاسم')
+  id_col = find_column(
+      df, ['جامعي', 'رقم', 'ID', 'Student'], 'الرقم الجامعي'
   )
-  id_col = next(
-      (
-          c
-          for c in df.columns
-          if 'جامعي' in c or 'رقم' in c or 'ID' in c or 'Student' in c
-      ),
-      df.columns[2] if len(df.columns) > 2 else df.columns[0],
-  )
-  year_col = next(
-      (c for c in df.columns if 'سنة' in c or 'السنة' in c or 'Year' in c),
-      df.columns[3] if len(df.columns) > 3 else df.columns[0],
-  )
-  phone_col = next(
-      (
-          c
-          for c in df.columns
-          if 'هاتف' in c or 'موبايل' in c or 'واتس' in c or 'Phone' in c
-      ),
-      df.columns[4] if len(df.columns) > 4 else df.columns[0],
+  year_col = find_column(df, ['سنة', 'السنة', 'Year'], 'السنة الدراسية')
+  phone_col = find_column(
+      df, ['هاتف', 'موبايل', 'واتس', 'Phone'], 'رقم الهاتف'
   )
 
   df_students = pd.DataFrame({
@@ -147,7 +173,7 @@ def process_excel_file(file_path):
 
   df_clean = df_students.drop_duplicates(subset=['Student_ID'], keep='last')
 
-  conn = sqlite3.connect('telecom_students.db')
+  conn = get_connection()
   cursor = conn.cursor()
   added_count = 0
 
@@ -165,7 +191,10 @@ def process_excel_file(file_path):
           (row['Student_ID'], row['Name'], row['Year'], row['Phone']),
       )
       added_count += 1
-    except sqlite3.IntegrityError:
+    except Exception as e:
+      logger.warning(
+          'تعذر استيراد الطالب %s: %s', row['Student_ID'], e
+      )
       continue
 
   conn.commit()
@@ -176,8 +205,34 @@ def process_excel_file(file_path):
 if os.path.exists('uploaded_responses.xlsx'):
   try:
     process_excel_file('uploaded_responses.xlsx')
-  except Exception:
-    pass
+  except Exception as e:
+    logger.warning('فشل استيراد ملف الإكسل المحفوظ سابقاً: %s', e)
+
+
+# ==================== توليد ملف الطلاب (الكل / المتبقين فقط) ====================
+def build_students_excel(remaining_only=False):
+  """يبني ملف Excel لبيانات الطلاب.
+  remaining_only=True: يستثني الطلاب الذين انضموا فعلاً (joined=1)،
+  بحيث يمثل الملف قائمة "الباقي" فقط - وهذا يعني أن أي طالب ينضم
+  يختفي تلقائياً من هذا الملف بمجرد إعادة توليده.
+  """
+  conn = get_connection()
+  cursor = conn.cursor()
+  if remaining_only:
+    cursor.execute('SELECT * FROM students WHERE joined = 0')
+  else:
+    cursor.execute('SELECT * FROM students')
+  rows = cursor.fetchall()
+  columns = [d[0] for d in cursor.description]
+  df = pd.DataFrame(rows, columns=columns)
+  conn.close()
+
+  output = io.BytesIO()
+  with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    sheet = 'Remaining_Students' if remaining_only else 'Students_Status'
+    df.to_excel(writer, index=False, sheet_name=sheet)
+  output.seek(0)
+  return output, len(df)
 
 
 # ==================== لوحة التحكم للأدمن (Admin Panel) ====================
@@ -187,7 +242,11 @@ def get_admin_keyboard():
       text='📊 الإحصائيات العامة', callback_data='admin_stats'
   )
   btn_export = types.InlineKeyboardButton(
-      text='📥 تنزيل تقرير Excel', callback_data='admin_export'
+      text='📥 تنزيل تقرير Excel (الكل)', callback_data='admin_export'
+  )
+  btn_export_remaining = types.InlineKeyboardButton(
+      text='📄 تنزيل ملف المتبقين (لم ينضموا)',
+      callback_data='admin_export_remaining',
   )
   btn_search = types.InlineKeyboardButton(
       text='🔍 البحث عن طالب', callback_data='admin_search'
@@ -203,6 +262,7 @@ def get_admin_keyboard():
   )
 
   markup.add(btn_stats, btn_export)
+  markup.add(btn_export_remaining)
   markup.add(btn_search, btn_reset)
   markup.add(btn_update_phone, btn_broadcast)
   return markup
@@ -237,7 +297,7 @@ def handle_admin_callbacks(call):
   action = call.data
 
   if action == 'admin_stats':
-    conn = sqlite3.connect('telecom_students.db')
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM students')
     total = cursor.fetchone()[0]
@@ -268,21 +328,30 @@ def handle_admin_callbacks(call):
 
   elif action == 'admin_export':
     bot.answer_callback_query(call.id, '⏳ جاري جلب ملف البيانات...')
-    conn = sqlite3.connect('telecom_students.db')
-    df = pd.read_sql_query('SELECT * FROM students', conn)
-    conn.close()
-
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-      df.to_excel(writer, index=False, sheet_name='Students_Status')
-    output.seek(0)
+    output, count = build_students_excel(remaining_only=False)
 
     bot.send_document(
         call.message.chat.id,
         document=types.InputFile(
             output, filename='Telecom_Students_Report.xlsx'
         ),
-        caption='📊 **تقرير الطلاب الكامل وحالات الانضمام**',
+        caption=f'📊 **تقرير الطلاب الكامل وحالات الانضمام ({count} طالب)**',
+        parse_mode='Markdown',
+    )
+
+  elif action == 'admin_export_remaining':
+    bot.answer_callback_query(call.id, '⏳ جاري تجهيز ملف المتبقين...')
+    output, count = build_students_excel(remaining_only=True)
+
+    bot.send_document(
+        call.message.chat.id,
+        document=types.InputFile(
+            output, filename='Remaining_Students.xlsx'
+        ),
+        caption=(
+            f'📄 **ملف الطلاب الذين لم ينضموا بعد ({count} طالب)**\n'
+            'ملاحظة: أي طالب ينضم يُحذف تلقائياً من هذا الملف عند إعادة تنزيله.'
+        ),
         parse_mode='Markdown',
     )
 
@@ -331,7 +400,7 @@ def handle_admin_inputs(message):
 
   if state == 'awaiting_search_id':
     sid = message.text.strip()
-    conn = sqlite3.connect('telecom_students.db')
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         'SELECT name, year, phone, joined, telegram_user_id, joined_at FROM'
@@ -362,7 +431,7 @@ def handle_admin_inputs(message):
 
   elif state == 'awaiting_reset_id':
     sid = message.text.strip()
-    conn = sqlite3.connect('telecom_students.db')
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         'UPDATE students SET telegram_user_id = NULL, joined = 0 WHERE'
@@ -380,7 +449,7 @@ def handle_admin_inputs(message):
 
   elif state == 'awaiting_broadcast_msg':
     msg_text = message.text.strip()
-    conn = sqlite3.connect('telecom_students.db')
+    conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
         'SELECT telegram_user_id FROM students WHERE joined = 1 AND'
@@ -398,8 +467,11 @@ def handle_admin_inputs(message):
             parse_mode='Markdown',
         )
         success += 1
-      except Exception:
+      except Exception as e:
+        logger.warning('فشل إرسال الإعلان للمستخدم %s: %s', u[0], e)
         continue
+      # تهدئة بسيطة لتجنب حد الإرسال (Flood Control) من تيليجرام
+      time.sleep(0.05)
 
     bot.reply_to(
         message,
@@ -419,7 +491,7 @@ def handle_admin_inputs(message):
     else:
       sid = args[0].strip()
       new_phone = clean_phone(args[1].strip())
-      conn = sqlite3.connect('telecom_students.db')
+      conn = get_connection()
       cursor = conn.cursor()
       cursor.execute(
           'UPDATE students SET phone = ? WHERE student_id = ?', (new_phone, sid)
@@ -475,6 +547,7 @@ def handle_excel_upload(message):
     )
 
   except Exception as e:
+    logger.exception('فشل معالجة ملف الإكسل المرفوع')
     bot.edit_message_text(
         f'❌ حدث خطأ أثناء معالجة الملف: {str(e)}',
         chat_id=message.chat.id,
@@ -492,7 +565,7 @@ def start_command(message):
     admin_command(message)
     return
 
-  conn = sqlite3.connect('telecom_students.db')
+  conn = get_connection()
   cursor = conn.cursor()
   cursor.execute(
       'SELECT name, year, joined FROM students WHERE telegram_user_id = ?',
@@ -505,7 +578,8 @@ def start_command(message):
         message.chat.id,
         f'🚫 **عذراً يا {existing_user_by_id[0]}!**\n\n'
         f'لقدحصلت على روابط الانضمام لسنتك الدراسية (**{existing_user_by_id[1]}**) سابقاً.\n'
-        f'⚠️ **النظام يمنع الحصول على روابط أخرى.**',
+        f'⚠️ **النظام يمنع الحصول على روابط أخرى.**\n\n'
+        f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
         parse_mode='Markdown',
     )
     conn.close()
@@ -525,6 +599,7 @@ def start_command(message):
       'أهلاً بك في البوت الرسمي لقسم الهندسة الإلكترونية والاتصالات (الهمك)'
       ' 🎓\n\nللحصول على روابط مجموعة المحاضرات ومجموعة المناقشة الخاصة بسنتك'
       ' الدراسية، يرجى الضغط على الزر أدناه لمشاركة رقمك المعتمد في الاستبيان.'
+      f'\n\n📞 لأي استفسار أو مشكلة تواصل مع الهيئة: @{ADMIN_USERNAME}'
   )
   bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
 
@@ -539,7 +614,7 @@ def handle_contact(message):
   cleaned_phone = clean_phone(raw_phone)
   user_id = message.from_user.id
 
-  conn = sqlite3.connect('telecom_students.db')
+  conn = get_connection()
   cursor = conn.cursor()
 
   cursor.execute(
@@ -550,7 +625,8 @@ def handle_contact(message):
   if already_joined_account and already_joined_account[2] == 1:
     bot.send_message(
         message.chat.id,
-        '🚫 **عذراً! حسابك التليغرام مسجّل ومستلم للروابط سابقاً.**',
+        '🚫 **عذراً! حسابك التليغرام مسجّل ومستلم للروابط سابقاً.**\n\n'
+        f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode='Markdown',
     )
@@ -568,7 +644,7 @@ def handle_contact(message):
         message.chat.id,
         '❌ **لم يتم العثور على هذا الرقم في قائمة الاستبيان.**\n\n'
         'يرجى التأكد من تعبئة الاستبيان بنفس هذا الرقم، أو التواصل مع الهيئة'
-        ' لمراجعة بياناتك.',
+        f' لمراجعة بياناتك: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode='Markdown',
     )
@@ -581,7 +657,8 @@ def handle_contact(message):
     bot.send_message(
         message.chat.id,
         f'⚠️ **عذراً، هذا الرقم الجامعي ({student_id}) استلم روابط الانضمام'
-        ' سابقاً ولا يمكن استخدامه مجدداً.**',
+        ' سابقاً ولا يمكن استخدامه مجدداً.**\n\n'
+        f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode='Markdown',
     )
@@ -593,7 +670,8 @@ def handle_contact(message):
   if not year_data:
     bot.send_message(
         message.chat.id,
-        '⚠️ خطأ في إعدادات السنة الدراسية، يرجى مراجعة الأدمن.',
+        '⚠️ خطأ في إعدادات السنة الدراسية، يرجى مراجعة الأدمن:'
+        f' @{ADMIN_USERNAME}',
     )
     conn.close()
     return
@@ -646,7 +724,19 @@ def handle_contact(message):
         parse_mode='Markdown',
     )
 
+    # إشعار الأدمن (اختياري) أن طالباً جديداً انضم - مفيد لتتبع التقدم لحظياً
+    try:
+      bot.send_message(
+          ADMIN_ID,
+          f'ℹ️ الطالب **{name}** ({student_id} - {year_name}) انضم الآن.\n'
+          'تم حذفه من قائمة "المتبقين" تلقائياً.',
+          parse_mode='Markdown',
+      )
+    except Exception as e:
+      logger.warning('تعذر إشعار الأدمن بانضمام طالب: %s', e)
+
   except Exception as e:
+    logger.exception('فشل إنشاء روابط الانضمام')
     bot.send_message(
         message.chat.id, f'❌ حدث خطأ أثناء إنشاء روابط الانضمام: {str(e)}'
     )
