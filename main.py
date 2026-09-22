@@ -567,7 +567,7 @@ def handle_contact(message):
     bot.send_message(
         message.chat.id,
         '❌ **لم يتم العثور على هذا الرقم في قائمة الاستبيان.**\n\n'
-        'يرجى التواصل مع @Youssef_Sabra'
+        'يرجى التأكد من تعبئة الاستبيان بنفس هذا الرقم، أو التواصل مع الهيئة'
         ' لمراجعة بياناتك.',
         reply_markup=types.ReplyKeyboardRemove(),
         parse_mode='Markdown',
@@ -665,4 +665,3 @@ if __name__ == '__main__':
   bot_thread.start()
 
   run_flask()
-
