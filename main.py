@@ -275,7 +275,7 @@ def admin_command(message):
     return
 
   text = (
-      '🛠️ **لوحة تحكم رئيس الهيئة (Admin Panel)**\n\n'
+      '🛠️ <b>لوحة تحكم رئيس الهيئة (Admin Panel)</b>\n\n'
       'مرحباً بك! اختر الخدمة التي تريد تنفيذها من الأزرار أدناه، أو أرسل ملف'
       ' الـ Excel لتحديث البيانات فوراً.'
   )
@@ -283,7 +283,7 @@ def admin_command(message):
       message.chat.id,
       text,
       reply_markup=get_admin_keyboard(),
-      parse_mode='Markdown',
+      parse_mode='HTML',
   )
 
 
@@ -309,20 +309,20 @@ def handle_admin_callbacks(call):
     year_stats = cursor.fetchall()
     conn.close()
 
-    text = '📊 **إحصائيات الانتقال للتلغرام:**\n\n'
-    text += f'👥 إجمالي المسجلين بالاستبيان: **{total}**\n'
-    text += f'✅ إجمالي المنضمين فعلياً: **{joined}**\n\n'
-    text += '📌 **التفاصيل حسب السنة:**\n'
+    text = '📊 <b>إحصائيات الانتقال للتلغرام:</b>\n\n'
+    text += f'👥 إجمالي المسجلين بالاستبيان: <b>{total}</b>\n'
+    text += f'✅ إجمالي المنضمين فعلياً: <b>{joined}</b>\n\n'
+    text += '📌 <b>التفاصيل حسب السنة:</b>\n'
 
     for y_name, count, joined_count in year_stats:
       jc = joined_count if joined_count else 0
-      text += f'• {y_name}: **{jc} / {count}** انضموا\n'
+      text += f'• {y_name}: <b>{jc} / {count}</b> انضموا\n'
 
     bot.send_message(
         call.message.chat.id,
         text,
         reply_markup=get_admin_keyboard(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     bot.answer_callback_query(call.id)
 
@@ -333,10 +333,10 @@ def handle_admin_callbacks(call):
     bot.send_document(
         call.message.chat.id,
         document=types.InputFile(
-            output, filename='Telecom_Students_Report.xlsx'
+            output, file_name='Telecom_Students_Report.xlsx'
         ),
-        caption=f'📊 **تقرير الطلاب الكامل وحالات الانضمام ({count} طالب)**',
-        parse_mode='Markdown',
+        caption=f'📊 <b>تقرير الطلاب الكامل وحالات الانضمام ({count} طالب)</b>',
+        parse_mode='HTML',
     )
 
   elif action == 'admin_export_remaining':
@@ -346,20 +346,20 @@ def handle_admin_callbacks(call):
     bot.send_document(
         call.message.chat.id,
         document=types.InputFile(
-            output, filename='Remaining_Students.xlsx'
+            output, file_name='Remaining_Students.xlsx'
         ),
         caption=(
-            f'📄 **ملف الطلاب الذين لم ينضموا بعد ({count} طالب)**\n'
+            f'📄 <b>ملف الطلاب الذين لم ينضموا بعد ({count} طالب)</b>\n'
             'ملاحظة: أي طالب ينضم يُحذف تلقائياً من هذا الملف عند إعادة تنزيله.'
         ),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
 
   elif action == 'admin_search':
     user_states[call.from_user.id] = 'awaiting_search_id'
     bot.send_message(
         call.message.chat.id,
-        '🔍 **يرجى إرسال الرقم الجامعي للطالب المراد البحث عنه:**',
+        '🔍 <b>يرجى إرسال الرقم الجامعي للطالب المراد البحث عنه:</b>',
     )
     bot.answer_callback_query(call.id)
 
@@ -367,7 +367,7 @@ def handle_admin_callbacks(call):
     user_states[call.from_user.id] = 'awaiting_reset_id'
     bot.send_message(
         call.message.chat.id,
-        '🔓 **يرجى إرسال الرقم الجامعي للطالب المراد فك قفله:**',
+        '🔓 <b>يرجى إرسال الرقم الجامعي للطالب المراد فك قفله:</b>',
     )
     bot.answer_callback_query(call.id)
 
@@ -375,7 +375,7 @@ def handle_admin_callbacks(call):
     user_states[call.from_user.id] = 'awaiting_broadcast_msg'
     bot.send_message(
         call.message.chat.id,
-        '📢 **اكتب الرسالة التي تريد بثها لجميع الطلاب المنضمين:**',
+        '📢 <b>اكتب الرسالة التي تريد بثها لجميع الطلاب المنضمين:</b>',
     )
     bot.answer_callback_query(call.id)
 
@@ -383,9 +383,9 @@ def handle_admin_callbacks(call):
     user_states[call.from_user.id] = 'awaiting_update_phone'
     bot.send_message(
         call.message.chat.id,
-        '📱 **أرسل الرقم الجامعي والرقم الجديد مفصولين بمسافة**\nمثال:'
-        ' `123456 0912345678`:',
-        parse_mode='Markdown',
+        '📱 <b>أرسل الرقم الجامعي والرقم الجديد مفصولين بمسافة</b>\nمثال:'
+        ' <code>123456 0912345678</code>:',
+        parse_mode='HTML',
     )
     bot.answer_callback_query(call.id)
 
@@ -416,16 +416,16 @@ def handle_admin_inputs(message):
       name, year, phone, joined, tg_id, joined_at = st
       status = '✅ انضم بالفعل' if joined == 1 else '❌ لم ينضم بعد'
       res = (
-          f'🔍 **بيانات الطالب:**\n\n'
-          f'👤 **الاسم:** {name}\n'
-          f'🆔 **الرقم الجامعي:** {sid}\n'
-          f'📚 **السنة:** {year}\n'
-          f'📱 **الرقم:** `{phone}`\n'
-          f'📌 **الحالة:** {status}\n'
-          f'🆔 **Telegram ID:** `{tg_id if tg_id else "غير مسجل"}`\n'
-          f'🕒 **تاريخ الانضمام:** {joined_at}'
+          f'🔍 <b>بيانات الطالب:</b>\n\n'
+          f'👤 <b>الاسم:</b> {name}\n'
+          f'🆔 <b>الرقم الجامعي:</b> {sid}\n'
+          f'📚 <b>السنة:</b> {year}\n'
+          f'📱 <b>الرقم:</b> <code>{phone}</code>\n'
+          f'📌 <b>الحالة:</b> {status}\n'
+          f'🆔 <b>Telegram ID:</b> <code>{tg_id if tg_id else "غير مسجل"}</code>\n'
+          f'🕒 <b>تاريخ الانضمام:</b> {joined_at}'
       )
-      bot.reply_to(message, res, parse_mode='Markdown')
+      bot.reply_to(message, res, parse_mode='HTML')
 
     del user_states[message.from_user.id]
 
@@ -463,8 +463,8 @@ def handle_admin_inputs(message):
       try:
         bot.send_message(
             u[0],
-            f'📢 **إعلان من هيئة الاتصالات:**\n\n{msg_text}',
-            parse_mode='Markdown',
+            f'📢 <b>إعلان من هيئة الاتصالات:</b>\n\n{msg_text}',
+            parse_mode='HTML',
         )
         success += 1
       except Exception as e:
@@ -475,8 +475,8 @@ def handle_admin_inputs(message):
 
     bot.reply_to(
         message,
-        f'✅ تم إرسال الإعلان بنجاح إلى **{success}** طالب.',
-        parse_mode='Markdown',
+        f'✅ تم إرسال الإعلان بنجاح إلى <b>{success}</b> طالب.',
+        parse_mode='HTML',
     )
     del user_states[message.from_user.id]
 
@@ -501,8 +501,8 @@ def handle_admin_inputs(message):
         conn.commit()
         bot.reply_to(
             message,
-            f'✅ تم تحديث رقم الطالب ({sid}) إلى `{new_phone}` بنجاح.',
-            parse_mode='Markdown',
+            f'✅ تم تحديث رقم الطالب ({sid}) إلى <code>{new_phone}</code> بنجاح.',
+            parse_mode='HTML',
         )
       else:
         bot.reply_to(message, '❌ الرقم الجامعي غير موجود.')
@@ -538,12 +538,12 @@ def handle_excel_upload(message):
     added_count = process_excel_file(excel_path)
 
     bot.edit_message_text(
-        f'✅ **تم تحديث قاعدة البيانات بنجاح!**\n\n'
-        f'📊 **عدد الطلاب المجهزين في النظام:** {added_count}\n'
+        f'✅ <b>تم تحديث قاعدة البيانات بنجاح!</b>\n\n'
+        f'📊 <b>عدد الطلاب المجهزين في النظام:</b> {added_count}\n'
         f'🚀 البوت جاهز الآن للتحقق والتوزيع.',
         chat_id=message.chat.id,
         message_id=msg.message_id,
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
 
   except Exception as e:
@@ -576,11 +576,11 @@ def start_command(message):
   if existing_user_by_id and existing_user_by_id[2] == 1:
     bot.send_message(
         message.chat.id,
-        f'🚫 **عذراً يا {existing_user_by_id[0]}!**\n\n'
-        f'لقدحصلت على روابط الانضمام لسنتك الدراسية (**{existing_user_by_id[1]}**) سابقاً.\n'
-        f'⚠️ **النظام يمنع الحصول على روابط أخرى.**\n\n'
+        f'🚫 <b>عذراً يا {existing_user_by_id[0]}!</b>\n\n'
+        f'لقدحصلت على روابط الانضمام لسنتك الدراسية (<b>{existing_user_by_id[1]}</b>) سابقاً.\n'
+        f'⚠️ <b>النظام يمنع الحصول على روابط أخرى.</b>\n\n'
         f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     conn.close()
     return
@@ -625,10 +625,10 @@ def handle_contact(message):
   if already_joined_account and already_joined_account[2] == 1:
     bot.send_message(
         message.chat.id,
-        '🚫 **عذراً! حسابك التليغرام مسجّل ومستلم للروابط سابقاً.**\n\n'
+        '🚫 <b>عذراً! حسابك التليغرام مسجّل ومستلم للروابط سابقاً.</b>\n\n'
         f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     conn.close()
     return
@@ -642,11 +642,11 @@ def handle_contact(message):
   if not student:
     bot.send_message(
         message.chat.id,
-        '❌ **لم يتم العثور على هذا الرقم في قائمة الاستبيان.**\n\n'
+        '❌ <b>لم يتم العثور على هذا الرقم في قائمة الاستبيان.</b>\n\n'
         'يرجى التأكد من تعبئة الاستبيان بنفس هذا الرقم، أو التواصل مع الهيئة'
         f' لمراجعة بياناتك: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     conn.close()
     return
@@ -656,11 +656,11 @@ def handle_contact(message):
   if joined == 1:
     bot.send_message(
         message.chat.id,
-        f'⚠️ **عذراً، هذا الرقم الجامعي ({student_id}) استلم روابط الانضمام'
-        ' سابقاً ولا يمكن استخدامه مجدداً.**\n\n'
+        f'⚠️ <b>عذراً، هذا الرقم الجامعي ({student_id}) استلم روابط الانضمام'
+        ' سابقاً ولا يمكن استخدامه مجدداً.</b>\n\n'
         f'📞 لأي استفسار تواصل مع الهيئة: @{ADMIN_USERNAME}',
         reply_markup=types.ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     conn.close()
     return
@@ -709,11 +709,11 @@ def handle_contact(message):
     markup.add(btn1, btn2)
 
     success_msg = (
-        f'✅ **تم التحقق من بياناتك بنجاح!**\n\n'
-        f'👤 **الاسم:** {name}\n'
-        f'🆔 **الرقم الجامعي:** {student_id}\n'
-        f'📚 **السنة الدراسية:** {year_name}\n\n'
-        f'👇 **إليك روابط الانضمام الرسمية المخصصة لسنتك:**\n'
+        f'✅ <b>تم التحقق من بياناتك بنجاح!</b>\n\n'
+        f'👤 <b>الاسم:</b> {name}\n'
+        f'🆔 <b>الرقم الجامعي:</b> {student_id}\n'
+        f'📚 <b>السنة الدراسية:</b> {year_name}\n\n'
+        f'👇 <b>إليك روابط الانضمام الرسمية المخصصة لسنتك:</b>\n'
         f'*(ملاحظة: الروابط شخصية وخاصة بك وصالحة للاستخدام مرة واحدة فقط)*'
     )
 
@@ -721,16 +721,16 @@ def handle_contact(message):
         message.chat.id,
         success_msg,
         reply_markup=markup,
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
 
     # إشعار الأدمن (اختياري) أن طالباً جديداً انضم - مفيد لتتبع التقدم لحظياً
     try:
       bot.send_message(
           ADMIN_ID,
-          f'ℹ️ الطالب **{name}** ({student_id} - {year_name}) انضم الآن.\n'
+          f'ℹ️ الطالب <b>{name}</b> ({student_id} - {year_name}) انضم الآن.\n'
           'تم حذفه من قائمة "المتبقين" تلقائياً.',
-          parse_mode='Markdown',
+          parse_mode='HTML',
       )
     except Exception as e:
       logger.warning('تعذر إشعار الأدمن بانضمام طالب: %s', e)
